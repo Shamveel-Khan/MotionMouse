@@ -76,7 +76,7 @@ class Session:
             readiness = "Ready to start touchpad control."
         elif self.mode == "camera":
             readiness = ("Camera ready. Tap Start tracking." if camera_fresh and self.camera_quality >= 0.6
-                         else "Enable the rear camera and aim at a textured surface. Wait for visual tracking Ready.")
+                         else "Enable the selected camera and aim at a textured scene. Wait for visual tracking Ready.")
         elif not fresh:
             readiness = "Waiting for fresh sensor samples on the laptop. Enable sensors and keep this page visible."
         elif not self.motion.calibrated:
@@ -158,7 +158,7 @@ class Session:
                         raise ValueError("Calibration is required. Keep the phone flat and tap Calibrate.")
                 elif self.mode == "camera":
                     if now - self.last_camera > self.config.stream_timeout or self.camera_quality < 0.6:
-                        raise ValueError("Camera is not ready. Enable the rear camera and aim at a textured surface.")
+                        raise ValueError("Camera is not ready. Enable the selected camera and aim at a textured scene.")
                     self.camera_bad_frames = 0
                 self.motion.reset("Tracking active")
                 self.tracking = True

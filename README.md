@@ -7,7 +7,8 @@ React website, a FastAPI WebSocket receiver, and a Linux uinput virtual mouse.
 pointing away from you. Translate right/left for cursor right/left; move it
 forward/back for cursor up/down. Tilting and rotating are not cursor controls.
 A separate **touchpad mode** provides finger-operated control without sensors.
-**Camera mode** uses the phone's rear camera above a textured surface to estimate
+**Camera mode** uses the phone's front camera by default, with a rear-camera option,
+to estimate
 movement from frame changes, without acceleration integration. See
 [USAGE.md](USAGE.md#use-the-camera-option) for the ngrok camera setup.
 
@@ -30,7 +31,7 @@ successful calibration or fresh delivery to the laptop.
   stale-sensor protection, and release of held buttons on interrupted control.
 - A real relative mouse on Wayland through python-evdev/uinput. No X11 automation
   and no ydotool subprocess per movement.
-- Rear-camera optical flow with a local preview, confidence indicator, axis
+- Front/rear-camera optical flow (front selected by default) with a local preview, confidence indicator, axis
   inversion/swap, and tracking-loss protection. Video stays on the phone.
 
 **This cannot provide accurate physical position tracking.** Accelerometers cannot
@@ -47,7 +48,7 @@ of your Infinix Smart 10 Pro are not assumed.
 
 ```text
 Phone browser, trusted HTTPS
-  DeviceMotionEvent / rear camera optical flow / pointer controls
+  DeviceMotionEvent / front or rear camera optical flow / pointer controls
   finite sensor samples (up to 60/s), camera deltas (up to 20/s)
                      │ WSS /ws, authenticated JSON v1
                      ▼
@@ -75,7 +76,7 @@ frontend/
     App.tsx           Controls, pointer capture, safety lifecycle, diagnostics
     connection.ts     WebSocket authentication, heartbeat, bounded reconnect
     sensors.ts        Permission/capability detection and sample acquisition
-    CameraPanel.tsx    Rear camera preview, permission and direction controls
+    CameraPanel.tsx    Camera selection, preview, permission and direction controls
     camera.ts         Capture lifecycle, local grayscale frames and motion output
     optical-flow.ts   Textured patch matching and dominant displacement estimate
     protocol.ts       TypeScript wire interfaces
@@ -383,11 +384,17 @@ empty folder or other harmless desktop window, and keep a physical mouse availab
 
 ## Camera mode and remaining limitations
 
-Select Camera, enable rear camera access, and hold the phone screen-up around
-15–30 cm above well-lit printed text or a textured desk. Keep the rear lens clear,
-height steady and phone parallel to the surface. Wait for Visual tracking Ready
+Select Camera and enable the default front camera while pointing it at a well-lit,
+stationary textured scene. Keep distance steady and move parallel to the scene;
+avoid filling the view with a moving face or hands. Alternatively select Rear
+camera and hold the phone screen-up around 15–30 cm above printed text or a
+textured desk, with the rear lens uncovered. Wait for Visual tracking Ready
 and Laptop camera stream Live, then Start tracking. Calibration with motion
 sensors is unnecessary. Direction controls accommodate camera orientation.
+Both previews are unmirrored. Switching cameras closes the old capture and pauses
+movement; enable the selected camera and start again when Ready. The requested
+front/rear facing mode is required, so an unavailable camera produces an error
+rather than silently using the other lens.
 
 The browser processes 160×120 grayscale images at up to 20 fps, selects up to 24
 textured patches, matches within an eight-pixel search radius, and estimates

@@ -2,13 +2,20 @@
 
 ## Camera option revision
 
-Implement a third, browser-only rear-camera mode using getUserMedia on the existing
+Implement a third, browser-only camera mode using getUserMedia on the existing
 trusted HTTPS origin. A local 160×120 grayscale pipeline runs at up to 20 fps,
 selects textured grid patches, matches their displacement across adjacent frames,
 rejects ambiguous/outlier matches, and estimates dominant scene motion with a
 median consensus. Negate scene flow for camera movement, offer axis swap/inversion,
 and transmit numeric relative counts and confidence only. No video upload, camera
 recording, extra dependency, motion integration or inertial gesture timeout.
+
+Front camera is the default; a selector retains rear-camera support. Changing
+selection pauses input, closes the old stream and requires enabling the selected
+camera and starting again. Require the requested facing mode, report unavailable
+cameras, keep previews unmirrored, and cancel late permission completions safely.
+Front-camera use needs a stationary textured scene and movement parallel to it;
+faces/hands moving through the frame are not a reliable external reference.
 
 Use the phone screen-up above printed paper, with rear lens uncovered and height
 and orientation steady. This measures apparent image motion, not absolute or

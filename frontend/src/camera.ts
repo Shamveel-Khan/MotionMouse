@@ -1,6 +1,8 @@
 import { estimateFlow } from './optical-flow';
 import type { CameraSample } from './protocol';
 
+export type CameraFacing = 'user' | 'environment';
+
 export interface CameraStatus {
   enabled: boolean;
   starting: boolean;
@@ -15,7 +17,7 @@ interface CameraOptions { invertX: boolean; invertY: boolean; swapAxes: boolean 
 
 export const INITIAL_CAMERA_STATUS: CameraStatus = {
   enabled: false, starting: false, ready: false, fps: 0, quality: 0, features: 0,
-  message: 'Camera is off. Enable the rear camera to begin.',
+  message: 'Camera is off. Front camera is selected by default.',
 };
 
 export class CameraTracker {
@@ -43,17 +45,18 @@ export class CameraTracker {
   private options: CameraOptions = { invertX: false, invertY: false, swapAxes: false };
   private status: CameraStatus = { ...INITIAL_CAMERA_STATUS };
 
-  async start(video: HTMLVideoElement): Promise<void> {
+  async start(video: HTMLVideoElement, facing: CameraFacing = 'user'): Promise<void> {
     this.stop();
     const generation = this.generation;
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       this.publish({ message: 'Camera access requires trusted HTTPS, such as your ngrok HTTPS URL.' }, true);
       return;
     }
-    this.publish({ starting: true, message: 'Allow rear camera access when prompted…' }, true);
+    const label = facing === 'user' ? 'front' : 'rear';
+    this.publish({ starting: true, message: `Allow ${label} camera access when prompted…` }, true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: false, video: {
-        facingMode: { ideal: 'environment' }, width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 20, max: 30 },
+        facingMode: { exact: facing }, width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 20, max: 30 },
       } });
       if (generation !== this.generation) { stream.getTracks().forEach(track => track.stop()); return; }
       this.stream = stream;
@@ -76,14 +79,14 @@ export class CameraTracker {
       window.addEventListener('orientationchange', this.orientation);
       screen.orientation?.addEventListener('change', this.orientation);
       this.started = performance.now();
-      this.publish({ enabled: true, starting: false, message: 'Aim the rear camera at a well-lit textured surface. Warming up…' }, true);
+      this.publish({ enabled: true, starting: false, message: `Aim the ${label} camera at a well-lit, stationary textured scene. Warming up…` }, true);
       this.request = requestAnimationFrame(this.frame);
     } catch (error) {
       if (generation !== this.generation) return;
       this.stop();
       const name = error instanceof DOMException ? error.name : '';
       const message = name === 'NotAllowedError' ? 'Camera permission denied. Allow camera access in Chrome site settings.'
-        : name === 'NotFoundError' ? 'No usable camera found on this device.'
+        : name === 'NotFoundError' || name === 'OverconstrainedError' ? `The ${label} camera is unavailable. Choose the other camera and try again.`
         : name === 'NotReadableError' ? 'Camera is busy. Close other camera apps and try again.'
         : error instanceof Error ? error.message : 'Unable to start the camera.';
       this.publish({ message }, true);

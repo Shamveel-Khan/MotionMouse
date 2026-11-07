@@ -50,18 +50,22 @@ the public ngrok HTTPS address. The commands below are for you to run.
 
 ## Use the camera option
 
-1. Choose **Camera**, then tap **Enable rear camera** and grant permission.
-   You do not need to enable motion sensors or run inertial calibration.
-2. Hold the phone screen-up with its rear camera pointing down, roughly **15–30 cm
-   above** a well-lit sheet of printed text, a magazine, or a textured desk. Keep
-   the lens uncovered; do not lay it on the desk. Check the preview actually shows
-   the surface. An empty wall, a dark surface or repeated identical stripes may
-   not provide usable matches.
+1. Choose **Camera**. **Front camera** is selected by default; tap **Enable front
+   camera** and grant permission. Motion sensors and inertial calibration are
+   unnecessary. You can select **Rear camera** in the Camera dropdown instead.
+2. For the front camera, point it at a well-lit, stationary textured scene, such as
+   a patterned wall or printed material. Keep the phone parallel to that scene.
+   Avoid a moving face or hands filling the image. A blank ceiling or wall will
+   usually not provide enough texture.
+   For the rear camera, hold the phone screen-up **15–30 cm above** printed text or
+   a textured desk. Keep the lens uncovered; do not lay it on the desk. Check the
+   preview shows the intended scene. The preview is unmirrored for both cameras.
 3. Hold it steady at a fixed height until **Visual tracking: Ready** and
    **Laptop camera stream: Live**. The algorithm needs multiple textured areas
    spread across the image. Read the camera status message if Start is disabled.
-4. Tap **Start tracking**. Translate the phone right/left or forward/back **parallel
-   to the surface**, keeping height and orientation steady. Image changes now
+4. Tap **Start tracking**. Translate the phone **parallel to the scene**: right/left
+   and up/down for a vertical scene, or right/left and forward/back above a desk.
+   Keep distance and orientation steady. Image changes now
    generate relative cursor displacement directly; this mode has no inertial
    quiet-window reset or two-second gesture cutoff.
 5. If movement runs backward, pause and use **Invert horizontal** or **Invert
@@ -72,6 +76,11 @@ the public ngrok HTTPS address. The commands below are for you to run.
 7. Use **Stop tracking** to pause while keeping the preview open, or **Turn camera
    off** to release camera access. Switching modes, backgrounding or disconnecting
    also stops the camera. Keep the phone page visible.
+
+Changing the Camera dropdown stops capture and pauses tracking. Tap Enable for
+the selected camera, wait for Ready, then Start again. Returning to Camera mode
+selects Front by default. If a selected camera is unavailable, choose the other;
+the app does not silently substitute it.
 
 Processing happens on the phone at a target of up to 20 small frames/second.
 Video is neither recorded nor uploaded; the laptop receives bounded numeric
@@ -152,6 +161,9 @@ still make this mode unsuitable. The unchanged touchpad mode remains available.
 
 - Camera: enable over printed paper, wait for Ready, start and move steadily for
   more than five seconds. There should be no inertial gesture-duration stop.
+- Camera selection: confirm Front is the default, rear selection uses the rear
+  lens, and switching during capture or a pending permission request closes the
+  previous stream and keeps movement paused until an explicit restart.
 - Camera: hold still and observe whether output stops without acceleration drift.
 - Camera: check right/left and forward/back; verify inversion/swap controls, then
   left/right clicks and dragging at constant height.

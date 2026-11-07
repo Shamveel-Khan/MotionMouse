@@ -33,7 +33,7 @@ export default function App() {
   const startHint = !connected ? 'Connect to the laptop first.'
     : mode === 'touchpad' ? 'Ready for touchpad control.'
     : mode === 'camera' ? (server?.camera_fresh === undefined ? 'Restart the Python backend to load camera mode.'
-      : !vision.enabled ? 'Tap Enable rear camera and allow camera access.'
+      : !vision.enabled ? 'Enable the selected camera and allow camera access.'
       : !vision.ready ? vision.message : server.readiness)
     : !sensor.enabled ? 'Tap Enable sensors first.'
     : sensor.source === 'none' ? 'Waiting for usable accelerometer readings on the phone.'
@@ -306,7 +306,7 @@ export default function App() {
             <div><dt>Calibration</dt><dd>{server?.calibrating ? 'Measuring' : server?.calibrated ? 'Ready' : 'Required'}</dd></div>
           </>}
           <div><dt>Round trip</dt><dd>{connection.latency ?? '—'} ms</dd></div>
-          <div><dt>Source</dt><dd>{mode === 'touchpad' ? 'Touch' : mode === 'camera' ? 'Rear camera / optical flow' : server?.source === 'raw' ? 'Raw / degraded' : server?.source ?? '—'}</dd></div>
+          <div><dt>Source</dt><dd>{mode === 'touchpad' ? 'Touch' : mode === 'camera' ? 'Camera / optical flow' : server?.source === 'raw' ? 'Raw / degraded' : server?.source ?? '—'}</dd></div>
           {mode === 'camera' && <div><dt>Laptop camera stream</dt><dd>{server?.camera_fresh ? 'Live' : 'Waiting / stale'}</dd></div>}
           {mode === 'inertial' && <>
             <div><dt>Acceleration X / Y</dt><dd>{server?.acceleration.join(' / ') ?? '—'} m/s²</dd></div>

@@ -27,6 +27,8 @@ label .muted { font-size: 11px; }
 .row { display: flex; align-items: stretch; gap: 10px; }
 .wrap { flex-wrap: wrap; }
 button, input { font: inherit; }
+select { width: 100%; min-height: 46px; padding: 10px 12px; border: 1px solid #485969; border-radius: 10px; background: #111b24; color: #e6edf3; font: inherit; }
+select:focus-visible { outline: 3px solid #b9f9d8; outline-offset: 3px; }
 button { min-height: 46px; border-radius: 10px; border: 1px solid #485969; background: #253440; color: #e6edf3; padding: 10px 14px; cursor: pointer; }
 button:hover:enabled { border-color: #9fe7b0; }
 button:disabled { opacity: 0.45; cursor: default; }
