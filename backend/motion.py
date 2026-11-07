@@ -26,6 +26,7 @@ class Motion:
         self.noise = [0.03] * 3
         self.reference_gravity = None
         self.samples: list[Sample] = []
+        self.settle_started: float | None = None
         self.last_t: float | None = None
         self.hz = 0.0
         self.progress = 0.0
@@ -49,6 +50,7 @@ class Motion:
         self.calibrated = False
         self.progress = 0
         self.samples.clear()
+        self.settle_started = None
         self.last_t = None
         self.reset(reason)
 
@@ -70,11 +72,18 @@ class Motion:
         raise ValueError("No usable accelerometer readings. Try touchpad mode.")
 
     def collect(self, sample: Sample, source: str) -> None:
-        if not self.samples:
+        if self.settle_started is None:
+            self.settle_started = sample.t
             self.source = source
             self.angle = sample.angle
         if source != self.source or sample.angle != self.angle:
             self.fail("Sensor source or screen orientation changed; recalibrate")
+        # Tapping the calibration/start control can briefly shake the phone.
+        # Ignore that settling interval; still require a full stable two seconds.
+        if sample.t - self.settle_started < 750:
+            self.reason = "Settling after tap; leave the phone flat and still"
+            return
+        self.reason = "Measuring calibration; keep the phone flat and still"
         if sample.rotation is not None and length(sample.rotation) > 3:
             self.fail("Rotation detected during calibration; place the phone down and retry")
         self.samples.append(sample)
@@ -113,7 +122,14 @@ class Motion:
         dt = (sample.t - self.last_t) / 1000 if self.last_t is not None else 0
         self.last_t = sample.t
         if dt > self.config.sample_gap:
-            self.fail("Sensor sample gap; recalibrate before resuming")
+            if self.calibrating:
+                self.fail("Sensor sample gap during calibration; keep this page visible and retry")
+            # A sampling gap invalidates velocity, not a stationary bias estimate.
+            # Never integrate across it or silently resume active tracking.
+            self.reset("Sensor gap; movement estimate reset")
+            dt = 0
+            if tracking:
+                raise ValueError("Sensor gap; tracking paused. Wait for live readings, then start again.")
         if dt > 0:
             self.hz = 0.9 * self.hz + 0.1 / dt if self.hz else 1 / dt
         if self.calibrating:

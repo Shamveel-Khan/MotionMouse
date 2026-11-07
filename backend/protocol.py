@@ -35,13 +35,14 @@ class Calibration(Message):
 
 class Settings(Message):
     type: Literal["settings"]
-    mode: Literal["inertial", "touchpad"]
+    mode: Literal["inertial", "camera", "touchpad"]
     sensitivity: Annotated[float, Field(ge=0.1, le=5)]
 
 
 class Tracking(Message):
     type: Literal["tracking"]
     enabled: bool
+    calibrate_if_needed: bool = False
 
 
 class Button(Message):
@@ -56,6 +57,15 @@ class Touch(Message):
     dy: Annotated[float, Field(ge=-300, le=300)]
 
 
+class CameraFrame(Message):
+    type: Literal["camera"]
+    seq: Annotated[int, Field(ge=0, le=2**53 - 1)]
+    t: Timestamp
+    dx: Annotated[float, Field(ge=-120, le=120)]
+    dy: Annotated[float, Field(ge=-120, le=120)]
+    quality: Annotated[float, Field(ge=0, le=1)]
+
+
 class Release(Message):
     type: Literal["release"]
 
@@ -66,7 +76,7 @@ class Ping(Message):
 
 
 Incoming = Annotated[
-    Union[Sample, Calibration, Settings, Tracking, Button, Touch, Release, Ping],
+    Union[Sample, Calibration, Settings, Tracking, Button, Touch, CameraFrame, Release, Ping],
     Field(discriminator="type"),
 ]
 incoming = TypeAdapter(Incoming)

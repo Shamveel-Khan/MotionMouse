@@ -1,5 +1,17 @@
 # MotionMouse implementation plan
 
+## Tracking activation revision
+
+The activation fix separates the 150 ms phone integration interval from a 500 ms
+network delivery watchdog. Idle timing gaps reset velocity without clearing a
+completed stationary calibration. Active interruptions pause and release input;
+resuming remains manual. A 750 ms settling interval precedes the two stable
+calibration seconds. The new explicit Calibrate & start action starts only after
+success; cancel, release, backgrounding, failure or disconnect cancels that intent.
+The UI exposes calibration and laptop sample freshness alongside phone frequency.
+USAGE.md covers the ngrok HTTPS workflow; synthetic regression checks are supplied
+but not executed, consistent with the user's no-runtime-testing constraint.
+
 ## Goal and feasibility
 
 Build a local React/TypeScript controller and FastAPI backend for Arch Linux KDE

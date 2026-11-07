@@ -1,5 +1,5 @@
 export type Vector = [number, number, number];
-export type Mode = 'inertial' | 'touchpad';
+export type Mode = 'inertial' | 'camera' | 'touchpad';
 export type MouseButton = 'left' | 'right';
 
 export interface SensorSample {
@@ -11,11 +11,20 @@ export interface SensorSample {
   angle: 0 | 90 | 180 | 270;
 }
 
+export interface CameraSample {
+  seq: number;
+  t: number;
+  dx: number;
+  dy: number;
+  quality: number;
+}
+
 export type ClientMessage =
   | ({ type: 'sample' } & SensorSample)
+  | ({ type: 'camera' } & CameraSample)
   | { type: 'calibrate' }
   | { type: 'settings'; mode: Mode; sensitivity: number }
-  | { type: 'tracking'; enabled: boolean }
+  | { type: 'tracking'; enabled: boolean; calibrate_if_needed?: boolean }
   | { type: 'button'; button: MouseButton; down: boolean }
   | { type: 'touch'; dx: number; dy: number }
   | { type: 'release' }
@@ -28,6 +37,12 @@ export interface ServerState {
   sensitivity: number;
   tracking: boolean;
   output: 'log' | 'uinput';
+  sensor_fresh: boolean;
+  sensor_age_ms: number | null;
+  start_after_calibration: boolean;
+  readiness: string;
+  camera_fresh: boolean;
+  camera_quality: number;
   source: 'raw' | 'linear' | null;
   calibrated: boolean;
   calibrating: boolean;

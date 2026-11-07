@@ -16,7 +16,7 @@ from .config import Config
 from .cursor import Cursor
 from .motion import Motion
 from .protocol import (
-    Auth, Button, Calibration, Ping, Release, Sample, Settings, Touch, Tracking, incoming,
+    Auth, Button, Calibration, CameraFrame, Ping, Release, Sample, Settings, Touch, Tracking, incoming,
 )
 
 log = logging.getLogger("motionmouse")
@@ -44,6 +44,7 @@ class Session:
         self.mode = "inertial"
         self.sensitivity = 1.0
         self.tracking = False
+        self.start_after_calibration = False
         self.last_ping = time.monotonic()
         self.last_sample = 0.0
         self.calibration_started = 0.0
@@ -51,6 +52,12 @@ class Session:
         self.last_seq = -1
         self.last_phone_time = -1.0
         self.phone_offset: float | None = None
+        self.last_camera = 0.0
+        self.camera_quality = 0.0
+        self.camera_bad_frames = 0
+        self.camera_seq = -1
+        self.camera_phone_time = -1.0
+        self.camera_offset: float | None = None
         self.rate: deque[float] = deque()
 
     async def send(self, kind: str, **payload) -> None:
@@ -58,17 +65,53 @@ class Session:
         await asyncio.wait_for(self.socket.send_json({"v": 1, "type": kind, **payload}), timeout=0.25)
 
     async def state(self) -> None:
+        age = time.monotonic() - self.last_sample if self.last_sample else None
+        fresh = age is not None and age <= self.config.stream_timeout
+        camera_fresh = bool(self.last_camera and time.monotonic() - self.last_camera <= self.config.stream_timeout)
+        if self.tracking:
+            readiness = "Tracking active. Keep orientation steady."
+        elif self.motion.calibrating:
+            readiness = "Calibration in progress. Leave the phone flat and still."
+        elif self.mode == "touchpad":
+            readiness = "Ready to start touchpad control."
+        elif self.mode == "camera":
+            readiness = ("Camera ready. Tap Start tracking." if camera_fresh and self.camera_quality >= 0.6
+                         else "Enable the rear camera and aim at a textured surface. Wait for visual tracking Ready.")
+        elif not fresh:
+            readiness = "Waiting for fresh sensor samples on the laptop. Enable sensors and keep this page visible."
+        elif not self.motion.calibrated:
+            readiness = "Sensors received. Calibrate first, or tap Calibrate & start tracking."
+        else:
+            readiness = "Calibration ready. Tap Start tracking."
         await self.send("state", mode=self.mode, sensitivity=self.sensitivity,
                         tracking=self.tracking, output=self.config.output,
+                        sensor_fresh=fresh,
+                        sensor_age_ms=round(age * 1000) if age is not None else None,
+                        start_after_calibration=self.start_after_calibration,
+                        readiness=readiness,
+                        camera_fresh=camera_fresh, camera_quality=self.camera_quality,
                         **self.motion.diagnostics())
 
     def pause(self, reason: str, invalidate: bool = False) -> None:
         self.tracking = False
+        self.start_after_calibration = False
+        self.camera_bad_frames = 0
         self.cursor.release()
         if invalidate or self.motion.calibrating:
             self.motion.invalidate(reason)
         else:
             self.motion.reset(reason)
+        self.motion.last_t = None
+
+    def calibrate(self, start_after: bool) -> None:
+        if self.mode != "inertial":
+            raise ValueError("Select Translation mode before calibrating")
+        if time.monotonic() - self.last_sample > self.config.stream_timeout:
+            raise ValueError("The laptop is not receiving fresh sensor samples. Enable sensors and check your connection.")
+        self.pause("Calibration started")
+        self.motion.begin_calibration()
+        self.start_after_calibration = start_after
+        self.calibration_started = time.monotonic()
 
     async def handle(self, message) -> None:
         now = time.monotonic()
@@ -79,44 +122,64 @@ class Session:
             self.pause("Control released; start tracking manually to resume", invalidate=True)
             await self.state()
         elif isinstance(message, Settings):
-            self.pause("Settings changed; start tracking to resume")
+            if message.mode != self.mode:
+                self.last_camera = 0.0
+                self.camera_quality = 0.0
+                self.camera_seq = -1
+                self.camera_phone_time = -1.0
+                self.camera_offset = None
+            self.pause("Settings changed; start tracking to resume", invalidate=message.mode != self.mode)
             self.mode = message.mode
             self.sensitivity = message.sensitivity
             await self.state()
         elif isinstance(message, Calibration):
-            if self.mode != "inertial":
-                raise ValueError("Select inertial mode before calibrating")
-            if now - self.last_sample > 0.5:
-                raise ValueError("Enable sensors and wait for usable readings before calibration")
-            self.pause("Calibration started")
-            self.motion.begin_calibration()
-            self.calibration_started = now
+            self.calibrate(start_after=False)
             await self.state()
         elif isinstance(message, Tracking):
             if not message.enabled:
                 self.pause("Tracking stopped")
             else:
                 if self.motion.calibrating:
-                    raise ValueError("Wait for calibration to finish")
-                if self.mode == "inertial" and (
-                    not self.motion.calibrated or now - self.last_sample > self.config.sample_gap
-                ):
-                    raise ValueError("Enable sensors and complete a fresh calibration first")
+                    # A repeated tap must not cancel an in-flight calibration.
+                    await self.state()
+                    return
+                if self.mode == "inertial":
+                    if now - self.last_sample > self.config.stream_timeout:
+                        raise ValueError("Wait for fresh sensor samples on the laptop before starting")
+                    if not self.motion.calibrated:
+                        if message.calibrate_if_needed:
+                            self.calibrate(start_after=True)
+                            await self.state()
+                            return
+                        raise ValueError("Calibration is required. Keep the phone flat and tap Calibrate.")
+                elif self.mode == "camera":
+                    if now - self.last_camera > self.config.stream_timeout or self.camera_quality < 0.6:
+                        raise ValueError("Camera is not ready. Enable the rear camera and aim at a textured surface.")
+                    self.camera_bad_frames = 0
                 self.motion.reset("Tracking active")
                 self.tracking = True
             await self.state()
         elif isinstance(message, Sample):
+            if self.mode != "inertial":
+                return
             if message.seq <= self.last_seq or message.t <= self.last_phone_time:
                 raise ValueError("Out-of-order sensor sample; tracking paused")
             self.last_seq, self.last_phone_time = message.seq, message.t
             offset = now - message.t / 1000
             self.phone_offset = offset if self.phone_offset is None else min(self.phone_offset, offset)
-            if offset - self.phone_offset > 0.25:
-                self.pause("Delayed motion discarded; recalibrate", invalidate=True)
-                raise ValueError("Sensor delivery delayed by over 250 ms; stale motion discarded")
+            if offset - self.phone_offset > self.config.max_sample_delay:
+                self.pause("Delayed sensor sample discarded. Wait for live readings and start again.")
+                return
             self.last_sample = now
             if self.mode == "inertial":
+                was_calibrating = self.motion.calibrating
                 dx, dy = self.motion.feed(message, self.tracking, self.sensitivity)
+                if was_calibrating and not self.motion.calibrating and self.motion.calibrated:
+                    if self.start_after_calibration:
+                        self.start_after_calibration = False
+                        self.motion.reset("Tracking active after calibration")
+                        self.tracking = True
+                    await self.state()
                 if self.tracking:
                     self.cursor.move(dx, dy)
         elif isinstance(message, Button):
@@ -125,6 +188,31 @@ class Session:
             self.cursor.button(message.button, message.down)
         elif isinstance(message, Touch):
             if self.mode == "touchpad" and self.tracking:
+                self.cursor.move(message.dx * self.sensitivity, message.dy * self.sensitivity)
+        elif isinstance(message, CameraFrame):
+            if self.mode != "camera":
+                return
+            if message.seq <= self.camera_seq or message.t <= self.camera_phone_time:
+                raise ValueError("Out-of-order camera frame; tracking paused")
+            self.camera_seq, self.camera_phone_time = message.seq, message.t
+            offset = now - message.t / 1000
+            self.camera_offset = offset if self.camera_offset is None else min(self.camera_offset, offset)
+            if offset - self.camera_offset > self.config.max_sample_delay:
+                self.pause("Delayed camera motion discarded. Wait for Ready, then start again.")
+                self.camera_quality = 0.0
+                return
+            self.last_camera = now
+            self.camera_quality = message.quality
+            if message.quality < 0.6:
+                self.camera_bad_frames += 1
+                if self.tracking and self.camera_bad_frames >= 3:
+                    self.pause("Visual tracking lost. Aim at a textured surface and start again.")
+                    await self.state()
+                return
+            self.camera_bad_frames = 0
+            if self.tracking:
+                # Already relative displacement: no inertial integration,
+                # stationary heuristic or gesture-duration cutoff in this mode.
                 self.cursor.move(message.dx * self.sensitivity, message.dy * self.sensitivity)
 
     async def watchdog(self) -> bool:
@@ -136,8 +224,12 @@ class Session:
         if self.motion.calibrating and now - self.calibration_started > 5:
             self.pause("Calibration timed out; check sensor permissions and retry", invalidate=True)
             await self.state()
-        if self.mode == "inertial" and self.tracking and now - self.last_sample > self.config.sample_gap:
-            self.pause("Sensor stream stale; recalibrate", invalidate=True)
+        if self.mode == "inertial" and self.tracking and now - self.last_sample > self.config.stream_timeout:
+            self.pause("Sensor delivery paused; wait for live readings, then start tracking again")
+            await self.state()
+        if self.mode == "camera" and self.tracking and now - self.last_camera > self.config.stream_timeout:
+            self.pause("Camera stream stale; wait for Ready and start again")
+            self.camera_quality = 0.0
             await self.state()
         if now - self.last_diagnostic >= 0.1:
             await self.state()

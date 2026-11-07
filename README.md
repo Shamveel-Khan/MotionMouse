@@ -12,6 +12,11 @@ This repository was written without dependency installation, application
 execution, builds, tests, linters, or runtime verification. Treat it as an
 unverified prototype; all commands and checks below are for you to run.
 
+**Already set up and using ngrok?** See [USAGE.md](USAGE.md) for rebuilding after
+the tracking fix, starting without a CA certificate, and using the new
+**Calibrate & start tracking** flow. Sensor frequency alone does not indicate
+successful calibration or fresh delivery to the laptop.
+
 ## What to expect
 
 - Accelerometer-based short-gesture movement, stationary calibration, sensitivity,
@@ -214,17 +219,22 @@ and fails clearly if they do not exist. Use the compiled frontend for ordinary u
 2. In Translation mode, tap Enable sensors. If prompted, grant motion permission.
    Watch the source, sample rate and capability messages. An API existing does not
    mean usable readings are available; null/missing readings are handled explicitly.
-3. Place the phone flat, screen up and still. Tap **Calibrate · hold still**, then
-   leave it stationary for two seconds. Calibration needs at least 30 samples in
-   that window. It rejects excessive noise, detected rotation and a non-flat pose
-   when gravity readings are available.
-4. Tap Start tracking. Make short right/left or forward/back gestures while
+3. Check **Laptop sensor stream: Live**. Place the phone flat, screen up and still.
+   Tap **Calibrate & start tracking** and leave it stationary for about three
+   seconds: 750 ms to settle after tapping, then two seconds of measurement.
+   Tracking starts automatically only after calibration succeeds. Calibration
+   needs at least 30 samples in its measurement window; excessive noise, rotation
+   or a non-flat pose when gravity is available causes a visible failure. You can
+   instead use **Calibrate · hold still** and then tap **Start tracking** manually.
+4. Check Tracking says Active. Make short right/left or forward/back gestures while
    keeping orientation steady. Pause briefly between gestures. Lift/movement out
    of the screen plane is not an up/down control in this selected flat-phone mode.
 5. Tap the left/right buttons for clicks. Hold left with a finger while translating
    to drag. Buttons also work while tracking is paused, except during calibration.
-6. Changing sensitivity pauses tracking; tap Start again. Rotation, stale sensors,
-   emergency release, or backgrounding can require fresh calibration. After a
+6. Changing sensitivity pauses tracking; tap Start again. Sample gaps reset
+   velocity and pause active output without erasing a valid stationary bias.
+   Rotation, interrupted calibration, emergency release, or backgrounding can
+   require fresh calibration. After a
    browser permission prompt blurs the page, simply calibrate again.
 7. If inertial control is poor, select Touchpad, tap Start tracking and move a finger
    across the pad. Hold left with another finger to drag. Sensors are unnecessary.
@@ -251,7 +261,9 @@ No configuration is automatically written to system directories by the app.
 | `MOTIONMOUSE_FILTER_TAU` | `0.04` | Acceleration low-pass time constant, seconds |
 | `MOTIONMOUSE_DAMPING` | `2.0` | Estimated velocity decay rate, per second |
 | `MOTIONMOUSE_QUIET_SECONDS` | `0.15` | Quiet window before zeroing velocity |
-| `MOTIONMOUSE_SAMPLE_GAP` | `0.15` | Maximum sample/arrival gap, seconds |
+| `MOTIONMOUSE_SAMPLE_GAP` | `0.15` | Maximum phone timestamp interval to integrate across, seconds |
+| `MOTIONMOUSE_STREAM_TIMEOUT` | `0.5` | Network arrival watchdog and start-readiness window, seconds |
+| `MOTIONMOUSE_MAX_SAMPLE_DELAY` | `0.25` | Maximum extra delivery delay above the best observed delay, seconds |
 | `MOTIONMOUSE_GESTURE_SECONDS` | `2.0` | Gesture duration limit before requiring a quiet pause |
 | `MOTIONMOUSE_MAX_VELOCITY` | `1.5` | Per-axis estimated speed bound, m/s |
 | `MOTIONMOUSE_ROTATION_LIMIT` | `35` | Combined angular-rate rejection threshold, degrees/s |
@@ -276,17 +288,22 @@ direction/rate checks pause motion on excessive rotation, but slow yaw and absen
 gyroscopes limit rejection. Rotation alone is never intentionally mapped to motion.
 
 Sensor timestamps are relative monotonic phone times; integration uses successive
-differences. Laptop monotonic time drives watchdogs. Delay over 250 ms relative
-to the session's lowest observed delivery delay discards samples and invalidates
-calibration. This relative check needs no synchronized clocks and cannot detect
+differences. Laptop monotonic time drives watchdogs. Extra delivery delay above
+`MOTIONMOUSE_MAX_SAMPLE_DELAY` relative to the session's lowest observed delay
+discards samples and pauses output. Calibration interrupted this way must be
+retried; a completed stationary calibration is retained. This relative check needs
+no synchronized clocks and cannot detect
 the absolute delay of the very first sample. WebSocket output exceeding 8 KiB
 closes the client connection instead of replaying queued gestures. Incoming frames
 are limited to 4 KiB with 240 messages/second per controller. Cursor output is
 limited to 120 counts per axis per emission, with fractional counts retained.
 
 Heartbeats run every 500 ms; the laptop releases input after two seconds without
-one. In inertial tracking, a stale sensor stream pauses input after 150 ms by
-default. Actual detection includes event-loop scheduling delay. Frontend
+one. In inertial tracking, network delivery loss pauses input after 500 ms by
+default. Separately, phone sample intervals over 150 ms reset velocity; active
+tracking pauses, and calibration in progress fails. While paused, sample gaps do
+not erase a completed calibration. Neither kind of interruption automatically
+restarts tracking. Actual detection includes event-loop scheduling delay. Frontend
 reconnection backs off from 500 ms to 10 s; authentication failure or another
 controller requires a manual connection attempt. Diagnostics report **round-trip**
 latency, not a measured sensor-to-cursor delay. Filter and sensor delay add to it.
@@ -309,6 +326,8 @@ empty folder or other harmless desktop window, and keep a physical mouse availab
 | Authentication | A wrong token cannot control input; correct token connects. Open a second phone/tab and confirm it cannot take over. |
 | Origin | Remove the active browser origin from `.env`, restart and confirm connection is rejected. Restore afterward. |
 | Calibration | Flat stationary phone succeeds. Moving/rotating the phone during calibration fails with a useful message. |
+| Activation | Frequency without calibration offers Calibrate & start. Manual calibration stays paused; combined calibration starts only after success. Cancel/background prevents pending start. |
+| Idle timing | Stop tracking, keep the phone flat, and wait. Calibration stays Ready across idle sample gaps; Start is available again when the laptop stream is Live. |
 | Axes | Short right/left gestures move cursor right/left; forward/back maps to up/down. Keep orientation fixed. |
 | Stop/drift | Stop after each gesture and observe drift/reset delay. Record suppression of slow/steady travel rather than expecting exact tracking. |
 | Rotation | Rotate in place and check rejection/absence of intentional cursor control. Some gravity leakage remains possible. Recalibrate afterward. |
@@ -325,6 +344,11 @@ empty folder or other harmless desktop window, and keep a physical mouse availab
 
 ## Troubleshooting
 
+- **Start tracking unavailable despite frequency:** check the explanation under
+  the button and the separate Laptop sensor stream and Calibration diagnostics.
+  Use Calibrate & start tracking while flat and stationary. See [USAGE.md](USAGE.md)
+  for the updated ngrok flow and optional network jitter settings. After updating
+  source, rebuild the frontend, restart Python and refresh the phone.
 - **Certificate warning:** install the public CA as a CA certificate, restart the
   browser and check the IP matches the certificate. Do not disable browser security.
 - **Cannot connect:** check Wi-Fi/client isolation, LAN address, firewall, backend

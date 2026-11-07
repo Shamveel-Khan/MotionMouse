@@ -23,6 +23,8 @@ class Config:
     damping: float
     quiet_seconds: float
     sample_gap: float
+    stream_timeout: float
+    max_sample_delay: float
     gesture_seconds: float
     max_velocity: float
     rotation_limit: float
@@ -55,6 +57,8 @@ class Config:
             damping=number("DAMPING", 2, 0, 20),
             quiet_seconds=number("QUIET_SECONDS", 0.15, 0.05, 1),
             sample_gap=number("SAMPLE_GAP", 0.15, 0.05, 0.5),
+            stream_timeout=number("STREAM_TIMEOUT", 0.5, 0.15, 2),
+            max_sample_delay=number("MAX_SAMPLE_DELAY", 0.25, 0.05, 2),
             gesture_seconds=number("GESTURE_SECONDS", 2, 0.25, 5),
             max_velocity=number("MAX_VELOCITY", 1.5, 0.1, 5),
             rotation_limit=number("ROTATION_LIMIT", 35, 5, 180),
