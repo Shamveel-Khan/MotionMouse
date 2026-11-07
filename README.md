@@ -1,0 +1,375 @@
+# MotionMouse
+
+Turn a phone into a local wireless mouse for **Arch Linux KDE Wayland** using a
+React website, a FastAPI WebSocket receiver, and a Linux uinput virtual mouse.
+
+**Translation is experimental.** Hold the phone flat, screen up, with its top
+pointing away from you. Translate right/left for cursor right/left; move it
+forward/back for cursor up/down. Tilting and rotating are not cursor controls.
+A separate **touchpad mode** provides finger-operated control without sensors.
+
+This repository was written without dependency installation, application
+execution, builds, tests, linters, or runtime verification. Treat it as an
+unverified prototype; all commands and checks below are for you to run.
+
+## What to expect
+
+- Accelerometer-based short-gesture movement, stationary calibration, sensitivity,
+  rotation rejection where readings permit, and live diagnostics.
+- Left/right click buttons. Hold left and translate the phone to drag; in touchpad
+  mode, hold left with one finger and move another finger on the pad.
+- Authenticated encrypted local WebSockets, one controller, heartbeat timeout,
+  stale-sensor protection, and release of held buttons on interrupted control.
+- A real relative mouse on Wayland through python-evdev/uinput. No X11 automation
+  and no ydotool subprocess per movement.
+
+**This cannot provide accurate physical position tracking.** Accelerometers cannot
+distinguish rest from constant-speed motion. Tiny errors accumulate when integrated;
+gravity leakage from small rotations can exceed useful translation signals.
+Filtering, damping, deadbands and quiet-window resets reduce drift by discarding
+some real motion. Slow/constant-speed travel can disappear; braking can produce
+opposite-direction cursor movement; the cursor can drift briefly after stopping.
+No sensitivity setting or calibration completely fixes this. Use touchpad mode
+when inertial control is unsuitable. The exact sensor hardware and browser support
+of your Infinix Smart 10 Pro are not assumed.
+
+## Architecture
+
+```text
+Phone browser, trusted HTTPS
+  DeviceMotionEvent / pointer controls
+  finite sensor samples, at most 60 messages/s
+                     │ WSS /ws, authenticated JSON v1
+                     ▼
+Laptop: FastAPI + Uvicorn (one process / one worker)
+  origin/token validation → session/watchdogs → calibration and estimator
+                     │ relative counts + button transitions
+                     ▼
+  python-evdev → /dev/uinput → KDE/libinput → real Wayland cursor
+```
+
+FastAPI also serves the compiled React frontend on the same HTTPS origin.
+For development, Vite serves HTTPS on port 5173 and proxies `/ws` and `/api` to
+the HTTPS backend on port 8000. No cloud service is involved.
+
+```text
+backend/
+  config.py          Environment validation and tuning constants
+  protocol.py        Strict versioned incoming message schemas
+  motion.py          Calibration, filtering, integration, reset heuristics
+  cursor.py          Persistent relative mouse or logging-only output
+  main.py            Authentication, sessions, watchdogs, API/static hosting
+  requirements.txt
+frontend/
+  src/
+    App.tsx           Controls, pointer capture, safety lifecycle, diagnostics
+    connection.ts     WebSocket authentication, heartbeat, bounded reconnect
+    sensors.ts        Permission/capability detection and sample acquisition
+    protocol.ts       TypeScript wire interfaces
+    styles.css
+  vite.config.mjs     Optional HTTPS development proxy
+PLAN.md               Design, feasibility and development strategy
+.env.example          Backend configuration template
+```
+
+## 1. Install dependencies on the laptop
+
+Run from the repository root. You need an updated Arch system, Node.js
+**22.12 or newer**, npm, and Python **3.11 or newer**.
+
+```bash
+sudo pacman -Syu --needed python python-pip base-devel nodejs npm mkcert nss
+python -m venv .venv
+.venv/bin/python -m pip install -r backend/requirements.txt
+npm --prefix frontend install
+```
+
+`base-devel` supplies the compiler tools used if python-evdev needs to build its
+extension. Python dependencies stay inside `.venv`; do not use system-wide pip
+or `--break-system-packages`. No lockfiles are supplied because dependencies were
+not resolved here. Your npm install creates `frontend/package-lock.json`; retain
+it when you want reproducible subsequent installs with `npm ci`.
+
+## 2. Grant access to the virtual mouse
+
+The network backend should run as your regular user. It needs write access to
+`/dev/uinput`, not permission to read every physical input device. The following
+creates a dedicated group and udev rule:
+
+```bash
+sudo modprobe uinput
+sudo groupadd --system --force motionmouse
+sudo usermod -aG motionmouse "$USER"
+printf '%s\n' 'KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="motionmouse", MODE="0660", OPTIONS+="static_node=uinput"' | sudo tee /etc/udev/rules.d/80-motionmouse-uinput.rules
+sudo udevadm control --reload-rules
+sudo udevadm trigger --action=add /sys/devices/virtual/misc/uinput
+```
+
+**Log out of KDE completely and log back in** so new terminal sessions inherit
+the group. uinput access lets any process running as your user synthesize input;
+only add trusted users to this group. MotionMouse itself creates only a mouse.
+
+Optional, to load the module on future boots:
+
+```bash
+printf '%s\n' uinput | sudo tee /etc/modules-load.d/motionmouse.conf
+```
+
+If you already have an applicable uinput rule, use your existing setup rather
+than adding conflicting rules. Do not make `/dev/uinput` world-writable. If access
+is unavailable, explicit logging-only mode is described below.
+
+## 3. Set a token and allowed browser origins
+
+```bash
+cp .env.example .env
+.venv/bin/python -c 'import secrets; print(secrets.token_urlsafe(32))'
+ip -4 addr show
+```
+
+Copy the generated token into `MOTIONMOUSE_TOKEN` in `.env`. Find your laptop's
+Wi-Fi IPv4 address (for example `192.168.1.50`) and replace the example address in
+`MOTIONMOUSE_ORIGINS`. For that example the value is:
+
+```dotenv
+MOTIONMOUSE_ORIGINS=https://192.168.1.50:8000,https://localhost:8000,https://192.168.1.50:5173,https://localhost:5173
+```
+
+Origins must be explicit HTTPS origins, with the exact port and no path or
+wildcard. Include only addresses you will actually use. Token comparison is
+constant-time; the first WebSocket message carries it, never the URL. The page
+keeps it in memory, clears the input after connecting, and never persists it in
+browser storage. Reloading the page requires entering it again. Do not commit
+`.env` or share the token with others.
+
+## 4. Create trusted HTTPS for the phone
+
+Browsers restrict motion sensors to secure contexts. `http://192.168.1.50:8000`
+does not qualify just because it is on local Wi-Fi. A certificate warning bypass
+is not a dependable substitute for a trusted certificate.
+
+Set the variable below to **your actual LAN IP**, then generate a certificate:
+
+```bash
+mkdir -p certs
+mkcert -install
+MOTIONMOUSE_LAN_IP=192.168.1.50
+mkcert -cert-file certs/laptop.pem -key-file certs/laptop-key.pem "$MOTIONMOUSE_LAN_IP" localhost 127.0.0.1 ::1
+cp "$(mkcert -CAROOT)/rootCA.pem" certs/motionmouse-ca.crt
+```
+
+Transfer **only `certs/motionmouse-ca.crt`** to the phone, for example using USB.
+On Android/XOS, look under Settings → Security / More security settings →
+Encryption & credentials → Install a certificate → CA certificate. Menu names
+vary. Install the public CA certificate and acknowledge Android's local CA notice.
+Restart your browser if necessary. Use Chrome/Chromium on Android as the initial
+target; other browsers can have different certificate and sensor behavior.
+
+Never copy `rootCA-key.pem` from mkcert's CA directory or `laptop-key.pem` to the
+phone. The former can issue trusted certificates. All project `certs/` files are
+ignored by Git.
+
+If the laptop IP changes, regenerate the leaf certificate for the new address and
+update `.env` origins. You normally do not need a new CA or to reinstall that CA.
+A router DHCP reservation avoids this maintenance. A local DNS hostname also
+works if the phone can resolve it and it appears in both certificate and origins.
+
+## 5. Build the frontend and start the backend
+
+Build once, then run the HTTPS backend from the repository root:
+
+```bash
+npm --prefix frontend run build
+.venv/bin/python -m uvicorn backend.main:app --env-file .env --host 0.0.0.0 --port 8000 --workers 1 --ws websockets --ws-max-size 4096 --ws-max-queue 4 --ssl-certfile certs/laptop.pem --ssl-keyfile certs/laptop-key.pem --timeout-graceful-shutdown 3
+```
+
+Keep **one worker** and one backend instance: cursor ownership is process-local.
+Stop with Ctrl+C; normal shutdown releases held buttons and closes the virtual
+mouse. Rebuild after frontend changes, then refresh the phone. If the backend
+started before `frontend/dist` existed, restart it after the initial build.
+
+Both devices must be on the same local Wi-Fi. If your firewall blocks incoming
+connections, allow TCP 8000 **only from your trusted LAN** using your firewall's
+normal interface. Guest Wi-Fi/client isolation can prevent phone-to-laptop traffic.
+Do not forward this port on the router or expose it to the internet.
+
+### Optional: frontend development server
+
+Keep the same HTTPS backend running. In another terminal at the repository root:
+
+```bash
+npm --prefix frontend run dev
+```
+
+Open `https://<laptop-ip>:5173` on the phone. Include this exact origin in `.env`.
+The Vite proxy uses TLS verification bypass **only for its loopback connection to
+the backend**; browser-to-laptop HTTPS must still be trusted. Dev mode additionally
+needs LAN firewall access to TCP 5173. The config reads the same certificate files
+and fails clearly if they do not exist. Use the compiled frontend for ordinary use.
+
+## 6. Connect and control
+
+1. Open `https://<laptop-ip>:8000` on the phone. There should be **no certificate
+   warning**. Enter the configured pairing token and tap Connect.
+2. In Translation mode, tap Enable sensors. If prompted, grant motion permission.
+   Watch the source, sample rate and capability messages. An API existing does not
+   mean usable readings are available; null/missing readings are handled explicitly.
+3. Place the phone flat, screen up and still. Tap **Calibrate · hold still**, then
+   leave it stationary for two seconds. Calibration needs at least 30 samples in
+   that window. It rejects excessive noise, detected rotation and a non-flat pose
+   when gravity readings are available.
+4. Tap Start tracking. Make short right/left or forward/back gestures while
+   keeping orientation steady. Pause briefly between gestures. Lift/movement out
+   of the screen plane is not an up/down control in this selected flat-phone mode.
+5. Tap the left/right buttons for clicks. Hold left with a finger while translating
+   to drag. Buttons also work while tracking is paused, except during calibration.
+6. Changing sensitivity pauses tracking; tap Start again. Rotation, stale sensors,
+   emergency release, or backgrounding can require fresh calibration. After a
+   browser permission prompt blurs the page, simply calibrate again.
+7. If inertial control is poor, select Touchpad, tap Start tracking and move a finger
+   across the pad. Hold left with another finger to drag. Sensors are unnecessary.
+
+**Release all & pause** is the emergency control and clears calibration. Switching
+modes, stopping tracking, disconnecting, and backgrounding release held buttons.
+Keep the page visible. The browser may suspend sensors/networking when the screen
+locks. A screen wake lock is requested while tracking when the browser allows it,
+but control never relies on background execution. After returning from the
+background, enable sensors and recalibrate; reconnection never resumes tracking
+automatically. Another open tab can hold the single controller slot.
+
+## Configuration and estimator details
+
+Uvicorn's `--env-file .env` loads backend configuration. Restart after changes.
+No configuration is automatically written to system directories by the app.
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `MOTIONMOUSE_TOKEN` | required | 32–512 character random pairing secret |
+| `MOTIONMOUSE_ORIGINS` | required | Comma-separated explicit HTTPS origins |
+| `MOTIONMOUSE_OUTPUT` | `uinput` | `uinput` for real cursor; `log` for event logging only |
+| `MOTIONMOUSE_GAIN` | `2400` | Cursor counts per estimated metre, before UI sensitivity |
+| `MOTIONMOUSE_FILTER_TAU` | `0.04` | Acceleration low-pass time constant, seconds |
+| `MOTIONMOUSE_DAMPING` | `2.0` | Estimated velocity decay rate, per second |
+| `MOTIONMOUSE_QUIET_SECONDS` | `0.15` | Quiet window before zeroing velocity |
+| `MOTIONMOUSE_SAMPLE_GAP` | `0.15` | Maximum sample/arrival gap, seconds |
+| `MOTIONMOUSE_GESTURE_SECONDS` | `2.0` | Gesture duration limit before requiring a quiet pause |
+| `MOTIONMOUSE_MAX_VELOCITY` | `1.5` | Per-axis estimated speed bound, m/s |
+| `MOTIONMOUSE_ROTATION_LIMIT` | `35` | Combined angular-rate rejection threshold, degrees/s |
+| `MOTIONMOUSE_TILT_LIMIT` | `12` | Gravity-direction deviation rejection, degrees |
+
+UI sensitivity ranges from 0.1× to 5× and resets to 1× per connection. Constants
+are provisional, not tuned against this handset. KDE/libinput acceleration changes
+the relationship between virtual mouse counts and on-screen pixels.
+
+The backend prefers gravity-free `acceleration`. Otherwise it subtracts a
+stationary estimate from `accelerationIncludingGravity` and labels the source
+**raw/degraded**. Raw mode adapts its bias slowly during candidate stationary
+windows; it may mistake actual motion for rest. Gravity-free readings themselves
+may be software-fused and inaccurate. No readings are guaranteed by the phone name.
+
+After calibration, the processor applies bias correction, a time-aware low-pass
+filter, noise-derived deadband, trapezoidal velocity/displacement increments,
+exponential velocity damping and speed/output clamps. It does not maintain or
+claim an accurate absolute position. The screen-plane mapping uses screen
+orientation; changing screen orientation invalidates calibration. Gravity
+direction/rate checks pause motion on excessive rotation, but slow yaw and absent
+gyroscopes limit rejection. Rotation alone is never intentionally mapped to motion.
+
+Sensor timestamps are relative monotonic phone times; integration uses successive
+differences. Laptop monotonic time drives watchdogs. Delay over 250 ms relative
+to the session's lowest observed delivery delay discards samples and invalidates
+calibration. This relative check needs no synchronized clocks and cannot detect
+the absolute delay of the very first sample. WebSocket output exceeding 8 KiB
+closes the client connection instead of replaying queued gestures. Incoming frames
+are limited to 4 KiB with 240 messages/second per controller. Cursor output is
+limited to 120 counts per axis per emission, with fractional counts retained.
+
+Heartbeats run every 500 ms; the laptop releases input after two seconds without
+one. In inertial tracking, a stale sensor stream pauses input after 150 ms by
+default. Actual detection includes event-loop scheduling delay. Frontend
+reconnection backs off from 500 ms to 10 s; authentication failure or another
+controller requires a manual connection attempt. Diagnostics report **round-trip**
+latency, not a measured sensor-to-cursor delay. Filter and sensor delay add to it.
+
+### Logging-only diagnosis
+
+Set `MOTIONMOUSE_OUTPUT=log` in `.env`, then restart the same backend command.
+The page prominently labels this mode; events are logged but **no real input is
+injected**. It can be used without uinput access. Restore `uinput` and restart to
+control the actual cursor. This is an explicit choice, never a silent fallback.
+
+## Manual acceptance checks
+
+These are instructions for you; they have not been executed here. Start with an
+empty folder or other harmless desktop window, and keep a physical mouse available.
+
+| Scenario | What to check |
+| --- | --- |
+| HTTPS | Page loads without warning; sensors can be enabled. Plain LAN HTTP is blocked by the UI. |
+| Authentication | A wrong token cannot control input; correct token connects. Open a second phone/tab and confirm it cannot take over. |
+| Origin | Remove the active browser origin from `.env`, restart and confirm connection is rejected. Restore afterward. |
+| Calibration | Flat stationary phone succeeds. Moving/rotating the phone during calibration fails with a useful message. |
+| Axes | Short right/left gestures move cursor right/left; forward/back maps to up/down. Keep orientation fixed. |
+| Stop/drift | Stop after each gesture and observe drift/reset delay. Record suppression of slow/steady travel rather than expecting exact tracking. |
+| Rotation | Rotate in place and check rejection/absence of intentional cursor control. Some gravity leakage remains possible. Recalibrate afterward. |
+| Click | Left activates an item; right opens its context menu. Keyboard activation of the on-screen buttons also clicks. |
+| Drag | Hold left, translate, release. Repeat with two fingers in touchpad mode. Confirm release ends drag. |
+| Cancellation | Move a held finger outside a button, release, or interrupt with another app; no button should remain held. |
+| Safety stop | Release all & pause stops tracking and ends dragging. Changing modes/sensitivity releases buttons and pauses. |
+| Sensor loss | Disable motion permission or lock the phone during tracking; output stops and needs explicit reactivation. |
+| Network loss | Turn off Wi-Fi while holding left; laptop should release within the heartbeat timeout plus scheduling delay. |
+| Reconnect | Restore Wi-Fi; connection retries, but motion stays paused with fresh calibration required. |
+| Touchpad | With sensors unavailable, select Touchpad and verify movement, clicks and two-finger dragging. |
+| Permissions | Without uinput access, startup reports an actionable error. Explicit log mode starts without real cursor injection. |
+| Shutdown | Ctrl+C on the laptop ends dragging and destroys the virtual mouse. Restart and reconnect manually. |
+
+## Troubleshooting
+
+- **Certificate warning:** install the public CA as a CA certificate, restart the
+  browser and check the IP matches the certificate. Do not disable browser security.
+- **Cannot connect:** check Wi-Fi/client isolation, LAN address, firewall, backend
+  terminal, certificate trust, and exact allowed origin/port. `/api/health` on the
+  same HTTPS address reports backend readiness and selected output mode, without
+  secrets. It does not verify cursor delivery or sensor accuracy.
+- **No readings:** enable sensor access in browser site settings; try Android
+  Chrome; keep the page foregrounded. Missing gyroscope or browser-fused linear
+  acceleration can make translation impractical. Select Touchpad.
+- **Calibrates but jumps/drifts:** keep the phone flat, use short gestures, reduce
+  sensitivity, recalibrate, or select Touchpad. Browser APIs cannot recover an
+  external position reference from noisy acceleration.
+- **Cannot create virtual mouse:** check `/dev/uinput` exists and your login has
+  the dedicated group. Restart your login after group changes. Read the backend
+  exception; use explicit log mode to separate input permissions from networking.
+- **Mouse connected but cursor does not move:** confirm UI output says `uinput`,
+  tracking is Active, calibration is complete, sensors are recent, and KDE has not
+  disabled the MotionMouse input device. In touchpad mode, finger movement is
+  needed; physical translation is deliberately ignored.
+- **Another phone connected:** disconnect the other tab, or wait for its heartbeat
+  timeout after closing it, then connect again.
+- **Background return:** sensors stop when hidden. Enable sensors, recalibrate and
+  start tracking again. Stop/restart the backend if you need to revoke all sessions.
+
+## Future camera tracking
+
+A fixed laptop camera observing a marker attached to the phone would provide the
+external position reference inertial estimation lacks. A future version could
+calibrate a desk plane and perspective transform, detect marker corners, and map
+marker translation to relative cursor deltas. It must handle lighting, lens
+distortion, marker scale, occlusion, and loss of tracking. The marker must remain
+visible while the phone is screen-up; many built-in webcams cannot see that plane
+without repositioning. This camera mode is **not implemented**.
+
+Phone-camera visual odometry is another possible project, but requires image
+processing, scene texture, scale estimation and rotation/translation separation.
+It is not a guaranteed browser-only fix. Native Android sensors improve sampling
+and fusion access but do not eliminate the fundamental inertial drift problem.
+
+## References
+
+- [W3C Device Orientation and Motion](https://www.w3.org/TR/orientation-event/)
+- [Linux kernel uinput documentation](https://docs.kernel.org/input/uinput.html)
+- [python-evdev documentation](https://python-evdev.readthedocs.io/en/stable/)
+- [FastAPI WebSockets](https://fastapi.tiangolo.com/advanced/websockets/)
+- [Vite server configuration](https://vite.dev/config/server-options)
+- [Vite 8 and React plugin 6 compatibility](https://vite.dev/blog/announcing-vite8)
+- [mkcert and mobile certificate trust](https://github.com/FiloSottile/mkcert)

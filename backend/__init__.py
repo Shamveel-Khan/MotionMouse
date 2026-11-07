@@ -1,0 +1,1 @@
+"""MotionMouse laptop receiver."""
