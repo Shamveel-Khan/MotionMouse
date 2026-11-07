@@ -105,9 +105,14 @@ export class CameraTracker {
     this.onStatus(this.status);
   }
 
-  prepareTracking(): void {
+  prepareTracking(): boolean {
     // Only an explicit user Start clears a loss latch; stale server state cannot.
-    if (this.status.enabled && this.status.ready) this.blocked = false;
+    if (!this.status.enabled || !this.status.ready) {
+      this.publish({}, true);
+      return false;
+    }
+    this.blocked = false;
+    return true;
   }
 
   setTracking(enabled: boolean): void {

@@ -105,7 +105,7 @@ class Session:
 
     def calibrate(self, start_after: bool) -> None:
         if self.mode != "inertial":
-            raise ValueError("Select Translation mode before calibrating")
+            raise ValueError("Select Inertial mode before calibrating")
         if time.monotonic() - self.last_sample > self.config.stream_timeout:
             raise ValueError("The laptop is not receiving fresh sensor samples. Enable sensors and check your connection.")
         self.pause("Calibration started")
@@ -123,6 +123,10 @@ class Session:
             await self.state()
         elif isinstance(message, Settings):
             if message.mode != self.mode:
+                self.last_sample = 0.0
+                self.last_seq = -1
+                self.last_phone_time = -1.0
+                self.phone_offset = None
                 self.last_camera = 0.0
                 self.camera_quality = 0.0
                 self.camera_seq = -1

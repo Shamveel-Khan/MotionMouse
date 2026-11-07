@@ -7,6 +7,9 @@ React website, a FastAPI WebSocket receiver, and a Linux uinput virtual mouse.
 pointing away from you. Translate right/left for cursor right/left; move it
 forward/back for cursor up/down. Tilting and rotating are not cursor controls.
 A separate **touchpad mode** provides finger-operated control without sensors.
+**Camera mode** uses the phone's rear camera above a textured surface to estimate
+movement from frame changes, without acceleration integration. See
+[USAGE.md](USAGE.md#use-the-camera-option) for the ngrok camera setup.
 
 This repository was written without dependency installation, application
 execution, builds, tests, linters, or runtime verification. Treat it as an
@@ -27,6 +30,8 @@ successful calibration or fresh delivery to the laptop.
   stale-sensor protection, and release of held buttons on interrupted control.
 - A real relative mouse on Wayland through python-evdev/uinput. No X11 automation
   and no ydotool subprocess per movement.
+- Rear-camera optical flow with a local preview, confidence indicator, axis
+  inversion/swap, and tracking-loss protection. Video stays on the phone.
 
 **This cannot provide accurate physical position tracking.** Accelerometers cannot
 distinguish rest from constant-speed motion. Tiny errors accumulate when integrated;
@@ -42,8 +47,8 @@ of your Infinix Smart 10 Pro are not assumed.
 
 ```text
 Phone browser, trusted HTTPS
-  DeviceMotionEvent / pointer controls
-  finite sensor samples, at most 60 messages/s
+  DeviceMotionEvent / rear camera optical flow / pointer controls
+  finite sensor samples (up to 60/s), camera deltas (up to 20/s)
                      │ WSS /ws, authenticated JSON v1
                      ▼
 Laptop: FastAPI + Uvicorn (one process / one worker)
@@ -70,6 +75,9 @@ frontend/
     App.tsx           Controls, pointer capture, safety lifecycle, diagnostics
     connection.ts     WebSocket authentication, heartbeat, bounded reconnect
     sensors.ts        Permission/capability detection and sample acquisition
+    CameraPanel.tsx    Rear camera preview, permission and direction controls
+    camera.ts         Capture lifecycle, local grayscale frames and motion output
+    optical-flow.ts   Textured patch matching and dominant displacement estimate
     protocol.ts       TypeScript wire interfaces
     styles.css
   vite.config.mjs     Optional HTTPS development proxy
@@ -216,7 +224,7 @@ and fails clearly if they do not exist. Use the compiled frontend for ordinary u
 
 1. Open `https://<laptop-ip>:8000` on the phone. There should be **no certificate
    warning**. Enter the configured pairing token and tap Connect.
-2. In Translation mode, tap Enable sensors. If prompted, grant motion permission.
+2. In Inertial mode, tap Enable sensors. If prompted, grant motion permission.
    Watch the source, sample rate and capability messages. An API existing does not
    mean usable readings are available; null/missing readings are handled explicitly.
 3. Check **Laptop sensor stream: Live**. Place the phone flat, screen up and still.
@@ -373,20 +381,44 @@ empty folder or other harmless desktop window, and keep a physical mouse availab
 - **Background return:** sensors stop when hidden. Enable sensors, recalibrate and
   start tracking again. Stop/restart the backend if you need to revoke all sessions.
 
-## Future camera tracking
+## Camera mode and remaining limitations
 
-A fixed laptop camera observing a marker attached to the phone would provide the
-external position reference inertial estimation lacks. A future version could
-calibrate a desk plane and perspective transform, detect marker corners, and map
-marker translation to relative cursor deltas. It must handle lighting, lens
-distortion, marker scale, occlusion, and loss of tracking. The marker must remain
-visible while the phone is screen-up; many built-in webcams cannot see that plane
-without repositioning. This camera mode is **not implemented**.
+Select Camera, enable rear camera access, and hold the phone screen-up around
+15–30 cm above well-lit printed text or a textured desk. Keep the rear lens clear,
+height steady and phone parallel to the surface. Wait for Visual tracking Ready
+and Laptop camera stream Live, then Start tracking. Calibration with motion
+sensors is unnecessary. Direction controls accommodate camera orientation.
 
-Phone-camera visual odometry is another possible project, but requires image
-processing, scene texture, scale estimation and rotation/translation separation.
-It is not a guaranteed browser-only fix. Native Android sensors improve sampling
-and fusion access but do not eliminate the fundamental inertial drift problem.
+The browser processes 160×120 grayscale images at up to 20 fps, selects up to 24
+textured patches, matches within an eight-pixel search radius, and estimates
+dominant displacement from consistent matches. Subpixel refinement and a small
+deadband reduce jitter. The backend receives bounded numeric displacements and
+confidence rather than images. It scales them by sensitivity and emits relative
+mouse movement directly: no inertial damping, quiet-window stop or gesture timer.
+The algorithm needs at least six spatially distributed matches and 60% consensus.
+Three bad frames, stale capture or delayed delivery pause and release input;
+reacquisition requires manual Start. Off/mode switch/background/disconnect closes
+camera tracks. Requests returning after cancellation are closed immediately.
+
+This is apparent 2D image motion, not metric, rotation-independent phone tracking.
+Phone rotation and moving objects can drive it, height changes affect scale, and
+weak/repeated texture, dark scenes, motion blur, reflections or autofocus can
+break matching. Keep the scene still and move slowly enough to retain features.
+No extra CV package, model download, microphone or video recording is involved.
+The camera path and its thresholds have not been tested on this phone by the agent.
+
+A future fixed laptop camera observing a marker could add an external position
+reference and perspective calibration. Full phone-camera visual odometry with
+rotation separation and metric scale remains future work. Native Android sensors
+alone would not eliminate the fundamental inertial drift problem.
+
+Synthetic optical-flow and backend session regression sources are provided, but
+were not executed. With your installed dependencies you can optionally run:
+
+```bash
+.venv/bin/python -m unittest discover -s tests -v
+node --experimental-strip-types --test tests/optical-flow.test.mjs
+```
 
 ## References
 
@@ -397,3 +429,5 @@ and fusion access but do not eliminate the fundamental inertial drift problem.
 - [Vite server configuration](https://vite.dev/config/server-options)
 - [Vite 8 and React plugin 6 compatibility](https://vite.dev/blog/announcing-vite8)
 - [mkcert and mobile certificate trust](https://github.com/FiloSottile/mkcert)
+- [W3C Media Capture and Streams](https://w3c.github.io/mediacapture-main/)
+- [MIT Vision Book: Optical Flow Estimation](https://visionbook.mit.edu/optical_flow.html)

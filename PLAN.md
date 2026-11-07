@@ -1,5 +1,25 @@
 # MotionMouse implementation plan
 
+## Camera option revision
+
+Implement a third, browser-only rear-camera mode using getUserMedia on the existing
+trusted HTTPS origin. A local 160×120 grayscale pipeline runs at up to 20 fps,
+selects textured grid patches, matches their displacement across adjacent frames,
+rejects ambiguous/outlier matches, and estimates dominant scene motion with a
+median consensus. Negate scene flow for camera movement, offer axis swap/inversion,
+and transmit numeric relative counts and confidence only. No video upload, camera
+recording, extra dependency, motion integration or inertial gesture timeout.
+
+Use the phone screen-up above printed paper, with rear lens uncovered and height
+and orientation steady. This measures apparent image motion, not absolute or
+rotation-independent 3D translation. Rotation, autofocus, weak/repeated texture,
+moving objects, occlusion and light changes can invalidate it. Suppress unreliable
+frames; three consecutive bad frames or a stalled/delayed stream pause and release
+buttons. Reacquisition requires explicit Start. Close camera tracks on off, mode
+switch, hidden page, disconnect and teardown. Guard pending permission requests
+against late completion after cancellation. Add backend gating/watchdog regression
+sources and manual visual acceptance scenarios; execute none under user constraints.
+
 ## Tracking activation revision
 
 The activation fix separates the 150 ms phone integration interval from a 500 ms
@@ -107,9 +127,10 @@ stale data, Wi-Fi loss, backgrounding and restart; safe reconnect; missing uinpu
 permissions; certificate trust; sample rate and latency. No accuracy guarantee or
 claim of successful runtime validation will be made.
 
-## Camera fallback and sources
+## Original camera fallback scope and sources
 
-Camera tracking is future work, not implemented in this prototype. A fixed laptop
+The initial plan deferred camera tracking; the camera revision above supersedes
+that decision with implemented rear-camera optical flow. A fixed laptop
 camera observing a marker on the phone provides an external position reference
 and can measure planar translation after perspective/scale calibration. It needs
 line of sight, adequate lighting, a marker visible while screen-up, and occlusion

@@ -81,6 +81,7 @@ export function estimateFlow(previous: Uint8Array, current: Uint8Array, width: n
     }
     if (alternative < best * 1.15 + 2) continue;
     const refine = (left: number, right: number): number => {
+      if (best < 0.001) return 0;
       const denominator = left - 2 * best + right;
       return denominator > 0.001 ? Math.max(-0.5, Math.min(0.5, 0.5 * (left - right) / denominator)) : 0;
     };

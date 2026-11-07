@@ -4,7 +4,7 @@ This guide assumes your dependencies, pairing token and uinput access are alread
 set up, and touchpad control previously worked. No CA certificate is needed with
 the public ngrok HTTPS address. The commands below are for you to run.
 
-## Load the tracking fix
+## Load the camera / tracking update
 
 1. Stop the Python backend with Ctrl+C. Keep your ngrok tunnel open if it is
    already running, so its address does not change.
@@ -43,14 +43,52 @@ the public ngrok HTTPS address. The commands below are for you to run.
 
 6. Refresh the ngrok HTTPS page on your phone and reconnect with your pairing
    token. Close other tabs holding the controller slot. You should see the new
-   **Laptop sensor stream** and **Calibration** diagnostics. If these are missing,
+   **Inertial / Camera / Touchpad** choices. If Camera is missing,
    the phone still has the old frontend: reload or clear that site's cache. If the
    page asks you to restart the backend, stop the old Python process and use the
    command above. The built frontend is served by Python; no Vite server is needed.
 
-## Start translation tracking
+## Use the camera option
 
-1. Choose **Translation** and tap **Enable sensors**. Grant permission if asked.
+1. Choose **Camera**, then tap **Enable rear camera** and grant permission.
+   You do not need to enable motion sensors or run inertial calibration.
+2. Hold the phone screen-up with its rear camera pointing down, roughly **15–30 cm
+   above** a well-lit sheet of printed text, a magazine, or a textured desk. Keep
+   the lens uncovered; do not lay it on the desk. Check the preview actually shows
+   the surface. An empty wall, a dark surface or repeated identical stripes may
+   not provide usable matches.
+3. Hold it steady at a fixed height until **Visual tracking: Ready** and
+   **Laptop camera stream: Live**. The algorithm needs multiple textured areas
+   spread across the image. Read the camera status message if Start is disabled.
+4. Tap **Start tracking**. Translate the phone right/left or forward/back **parallel
+   to the surface**, keeping height and orientation steady. Image changes now
+   generate relative cursor displacement directly; this mode has no inertial
+   quiet-window reset or two-second gesture cutoff.
+5. If movement runs backward, pause and use **Invert horizontal** or **Invert
+   vertical**. If the axes are exchanged, use **Swap horizontal / vertical**.
+   Then tap Start tracking again. Camera orientation varies between devices.
+6. Adjust sensitivity to taste, then restart tracking. Hold Left click while
+   moving to drag; release to drop. Right click opens the context menu.
+7. Use **Stop tracking** to pause while keeping the preview open, or **Turn camera
+   off** to release camera access. Switching modes, backgrounding or disconnecting
+   also stops the camera. Keep the phone page visible.
+
+Processing happens on the phone at a target of up to 20 small frames/second.
+Video is neither recorded nor uploaded; the laptop receives bounded numeric
+displacement, timestamp, sequence and confidence fields. No extra npm/Python
+packages, OpenCV downloads, or microphone permissions are needed for this mode.
+
+If three consecutive frames cannot be matched, camera tracking pauses and releases
+held buttons. Wait for Ready and start manually again. It also pauses on stale
+frames or excessive network delay. Move more slowly and improve lighting/texture
+if it repeatedly loses matches. Camera autofocus, blur, occlusion, moving objects,
+reflections and phone rotation can cause errors. This is **2D optical flow**, not
+metric 3D tracking: it cannot reliably distinguish translation from rotation, and
+height affects sensitivity. It works best like an optical mouse held over a desk.
+
+## Start inertial translation tracking
+
+1. Choose **Inertial** and tap **Enable sensors**. Grant permission if asked.
 2. Check **Laptop sensor stream: Live**. A nonzero **Phone sensor rate** alone
    only confirms readings on the phone, not successful delivery to the laptop.
 3. Put the phone flat, screen facing up, with its top edge pointing away from you.
@@ -89,6 +127,7 @@ Read the explanation directly under the button:
 | Settling / measuring calibration | Leave the phone flat and still for about three seconds. |
 | Calibration required | Use Calibrate & start tracking; frequency alone does not mean calibrated. |
 | Restart the Python backend | The frontend is updated but the running backend is still the old version. |
+| Camera is not Ready | Improve the light, aim at irregular printed texture, uncover the lens and hold steady. |
 
 If the diagnostic reason reports **Sensor sample gap during calibration**, the
 phone stopped sampling continuously. Keep Chrome foregrounded, avoid locking the
@@ -111,6 +150,19 @@ still make this mode unsuitable. The unchanged touchpad mode remains available.
 
 ## Manual checks after updating
 
+- Camera: enable over printed paper, wait for Ready, start and move steadily for
+  more than five seconds. There should be no inertial gesture-duration stop.
+- Camera: hold still and observe whether output stops without acceleration drift.
+- Camera: check right/left and forward/back; verify inversion/swap controls, then
+  left/right clicks and dragging at constant height.
+- Camera: cover the lens or aim at a blank surface; motion should be suppressed
+  and dragging released on tracking loss. Reacquisition requires manual Start.
+- Camera: deny permission, close another camera app, turn camera off during a
+  permission request, background the page, rotate the screen and change modes.
+  Verify no camera capture persists after off/background/disconnect.
+- Camera: disconnect Wi-Fi while dragging and confirm the timeout releases input.
+- Camera: inspect the WebSocket messages if desired; they should contain numeric
+  motion/confidence only, without images or video.
 - Sensors live but no calibration: the button offers Calibrate & start tracking.
 - After manual calibration: Start tracking is available, and the cursor stays
   still until you tap it.
@@ -128,8 +180,9 @@ If you want to run them with your installed Python dependencies:
 
 ```bash
 .venv/bin/python -m unittest discover -s tests -v
+node --experimental-strip-types --test tests/optical-flow.test.mjs
 ```
 
-The agent did not execute these checks, builds, or the app. Translation still has
+The agent did not execute these checks, builds, or the app. Inertial translation still has
 inertial drift, unreliable constant-speed detection, and possible braking reversal;
 this fix addresses activation and timing behavior, not those physical limitations.

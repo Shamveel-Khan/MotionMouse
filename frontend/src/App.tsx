@@ -248,7 +248,10 @@ export default function App() {
             releaseControls(); setLocalError(''); link.clearError();
             if (mode === 'camera') {
               if (tracking) camera.setTracking(false);
-              else camera.prepareTracking();
+              else if (!camera.prepareTracking()) {
+                setLocalError('Visual tracking is not ready yet. Hold steady over printed texture and try again.');
+                return;
+              }
             }
             link.send({ type: 'tracking', enabled: !tracking,
               calibrate_if_needed: mode === 'inertial' && !server?.calibrated });

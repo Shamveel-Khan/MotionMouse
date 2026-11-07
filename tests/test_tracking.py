@@ -12,7 +12,7 @@ from unittest.mock import patch
 from backend.config import Config
 from backend.main import Session
 from backend.motion import Motion
-from backend.protocol import Calibration, Release, Sample, Tracking
+from backend.protocol import Calibration, CameraFrame, Release, Sample, Settings, Tracking
 
 
 def configuration():
@@ -160,6 +160,87 @@ class SessionRegressionTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(state["sensor_fresh"])
         self.assertFalse(state["calibrated"])
         self.assertIn("Calibrate", state["readiness"])
+
+
+class CameraSessionRegressionTests(unittest.IsolatedAsyncioTestCase):
+    async def asyncSetUp(self):
+        self.cursor = FakeCursor()
+        self.session = Session(FakeSocket(), configuration(), self.cursor)
+        await self.session.handle(Settings(v=1, type="settings", mode="camera", sensitivity=1.0))
+
+    async def frame(self, sequence, quality=0.9, dx=2.0, dy=-1.0):
+        await self.session.handle(CameraFrame(v=1, type="camera", seq=sequence,
+            t=float(1000 + sequence * 50), dx=dx, dy=dy, quality=quality))
+
+    async def test_camera_needs_fresh_confident_frames_before_start(self):
+        with self.assertRaisesRegex(ValueError, "Camera is not ready"):
+            await self.session.handle(Tracking(v=1, type="tracking", enabled=True))
+        await self.frame(0, quality=0.1)
+        with self.assertRaisesRegex(ValueError, "Camera is not ready"):
+            await self.session.handle(Tracking(v=1, type="tracking", enabled=True))
+        await self.frame(1)
+        await self.session.handle(Tracking(v=1, type="tracking", enabled=True))
+        self.assertTrue(self.session.tracking)
+        self.assertFalse(self.session.motion.calibrated)
+
+    async def test_camera_frames_while_paused_never_move_cursor(self):
+        await self.frame(0)
+        self.assertEqual(self.cursor.moves, [])
+
+    async def test_visual_displacement_continues_beyond_inertial_gesture_limit(self):
+        await self.frame(0)
+        await self.session.handle(Tracking(v=1, type="tracking", enabled=True))
+        for sequence in range(1, 101):
+            await self.frame(sequence)
+        self.assertTrue(self.session.tracking)
+        self.assertEqual(len(self.cursor.moves), 100)
+        self.assertTrue(all(delta == (2.0, -1.0) for delta in self.cursor.moves))
+
+    async def test_low_confidence_suppresses_motion_and_releases_drag(self):
+        await self.frame(0)
+        await self.session.handle(Tracking(v=1, type="tracking", enabled=True))
+        self.cursor.held.add("left")
+        for sequence in range(1, 4):
+            await self.frame(sequence, quality=0.0)
+        self.assertEqual(self.cursor.moves, [])
+        self.assertFalse(self.session.tracking)
+        self.assertEqual(self.cursor.held, set())
+        await self.frame(4)
+        self.assertFalse(self.session.tracking)  # Reacquisition is never automatic.
+
+    async def test_stale_camera_releases_drag_and_requires_restart(self):
+        await self.frame(0)
+        await self.session.handle(Tracking(v=1, type="tracking", enabled=True))
+        self.cursor.held.add("left")
+        self.session.last_camera = time.monotonic() - 0.75
+        await self.session.watchdog()
+        self.assertFalse(self.session.tracking)
+        self.assertEqual(self.cursor.held, set())
+
+    async def test_camera_messages_in_other_modes_are_ignored(self):
+        await self.session.handle(Settings(v=1, type="settings", mode="touchpad", sensitivity=1.0))
+        await self.session.handle(Tracking(v=1, type="tracking", enabled=True))
+        await self.frame(0)
+        self.assertEqual(self.cursor.moves, [])
+        self.assertTrue(self.session.tracking)
+
+    async def test_inertial_samples_do_not_interrupt_camera_tracking(self):
+        await self.frame(0)
+        await self.session.handle(Tracking(v=1, type="tracking", enabled=True))
+        await self.session.handle(sample(999, 1))
+        self.assertTrue(self.session.tracking)
+        await self.frame(1)
+        self.assertEqual(self.cursor.moves, [(2.0, -1.0)])
+
+    async def test_delayed_camera_motion_is_discarded(self):
+        await self.frame(0)
+        await self.session.handle(Tracking(v=1, type="tracking", enabled=True))
+        self.cursor.held.add("left")
+        self.session.camera_offset = time.monotonic() - 10
+        await self.frame(1)
+        self.assertEqual(self.cursor.moves, [])
+        self.assertFalse(self.session.tracking)
+        self.assertEqual(self.cursor.held, set())
 
 
 if __name__ == "__main__":
